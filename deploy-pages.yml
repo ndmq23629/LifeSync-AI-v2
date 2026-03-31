@@ -1,0 +1,39 @@
+import dotenv from "dotenv";
+dotenv.config();
+
+export const env = {
+  port: Number(process.env.PORT || 8787),
+  nodeEnv: process.env.NODE_ENV || "development",
+  frontendOrigins: (process.env.FRONTEND_ORIGIN || "")
+    .split(",")
+    .map((value) => value.trim())
+    .filter(Boolean),
+  supabaseUrl: process.env.SUPABASE_URL || "",
+  supabaseServiceRoleKey: process.env.SUPABASE_SERVICE_ROLE_KEY || "",
+  openAiCompatBaseUrl: (process.env.OPENAI_COMPAT_BASE_URL || "https://api.openai.com/v1").replace(/\/$/, ""),
+  openAiApiKey: process.env.OPENAI_API_KEY || "",
+  aiModelCheap: process.env.AI_MODEL_CHEAP || "gpt-5-mini",
+  aiModelSmart: process.env.AI_MODEL_SMART || "gpt-5",
+  stripeSecretKey: process.env.STRIPE_SECRET_KEY || "",
+  stripeSuccessUrl: process.env.STRIPE_SUCCESS_URL || "",
+  stripeCancelUrl: process.env.STRIPE_CANCEL_URL || "",
+  vapidPublicKey: process.env.VAPID_PUBLIC_KEY || "",
+  vapidPrivateKey: process.env.VAPID_PRIVATE_KEY || "",
+  vapidSubject: process.env.VAPID_SUBJECT || "mailto:dev@example.com"
+};
+
+export function hasSupabase() {
+  return Boolean(env.supabaseUrl && env.supabaseServiceRoleKey);
+}
+
+export function hasAi() {
+  return Boolean(env.openAiApiKey);
+}
+
+export function hasStripe() {
+  return Boolean(env.stripeSecretKey && env.stripeSuccessUrl && env.stripeCancelUrl);
+}
+
+export function hasPush() {
+  return Boolean(env.vapidPublicKey && env.vapidPrivateKey);
+}

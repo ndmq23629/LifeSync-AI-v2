@@ -1,0 +1,37 @@
+import { z } from "zod";
+import { getSupabaseAdmin } from "../lib/supabase.js";
+
+const schema = z.object({
+  subscription: z.object({
+    endpoint: z.string().url(),
+    expirationTime: z.any().nullable().optional(),
+    keys: z.object({
+      p256dh: z.string(),
+      auth: z.string()
+    })
+  })
+});
+
+export function registerPushSubscribeRoute(app) {
+  app.post("/api/push-subscribe", async (req, res, next) => {
+    try {
+      const payload = schema.parse(req.body);
+      const user = req.currentUser;
+      const supabase = getSupabaseAdmin();
+
+      if (supabase && !user.isDemo) {
+        const { error } = await supabase.from("push_subscriptions").upsert({
+          user_id: user.id,
+          endpoint: payload.subscription.endpoint,
+          subscription_json: payload.subscription,
+          updated_at: new Date().toISOString()
+        }, { onConflict: "endpoint" });
+        if (error) throw error;
+      }
+
+      res.json({ ok: true });
+    } catch (error) {
+      next(error);
+    }
+  });
+}

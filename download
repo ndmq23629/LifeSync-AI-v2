@@ -1,0 +1,41 @@
+import webpush from "web-push";
+import { getSupabaseAdmin } from "../lib/supabase.js";
+import { env, hasPush } from "../lib/env.js";
+
+if (hasPush()) {
+  webpush.setVapidDetails(env.vapidSubject, env.vapidPublicKey, env.vapidPrivateKey);
+}
+
+export function registerPushTestRoute(app) {
+  app.post("/api/push-test", async (req, res, next) => {
+    try {
+      if (!hasPush()) throw new Error("Push chưa cấu hình VAPID.");
+      const user = req.currentUser;
+      const supabase = getSupabaseAdmin();
+      if (!supabase || user.isDemo) {
+        throw new Error("Cần Supabase + user thật để test push.");
+      }
+
+      const { data, error } = await supabase
+        .from("push_subscriptions")
+        .select("subscription_json")
+        .eq("user_id", user.id);
+
+      if (error) throw error;
+      const subs = data || [];
+      await Promise.all(
+        subs.map((row) =>
+          webpush.sendNotification(row.subscription_json, JSON.stringify({
+            title: "LifeSync AI",
+            body: "Đây là test push. Sau này dùng cho nhắc đúng ngữ cảnh, không spam.",
+            url: "/"
+          })).catch((err) => console.warn("push send failed", err.message))
+        )
+      );
+
+      res.json({ ok: true, sent: subs.length });
+    } catch (error) {
+      next(error);
+    }
+  });
+}

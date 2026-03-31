@@ -1,0 +1,72 @@
+import { bmi, groupBy, sum } from "./format.js";
+
+export function financeSummary(state) {
+  const tx = state.finance.transactions || [];
+  const monthPrefix = new Date().toISOString().slice(0, 7);
+  const monthTx = tx.filter((item) => (item.createdAt || "").startsWith(monthPrefix));
+  const incomeTotal = sum(monthTx.filter((item) => item.type === "income"), (item) => item.amount);
+  const expenseTotal = sum(monthTx.filter((item) => item.type === "expense"), (item) => item.amount);
+  const byCategory = groupBy(monthTx.filter((item) => item.type === "expense"), (item) => item.category || "Khác");
+  const categoryRows = Object.entries(byCategory)
+    .map(([category, items]) => ({
+      category,
+      total: sum(items, (item) => item.amount),
+      count: items.length
+    }))
+    .sort((a, b) => b.total - a.total);
+
+  return {
+    monthlyBudget: Number(state.finance.monthlyBudget || 0),
+    incomeTotal,
+    expenseTotal,
+    savings: incomeTotal - expenseTotal,
+    categoryRows,
+    transactionCount: monthTx.length
+  };
+}
+
+export function productivitySummary(state) {
+  const tasks = state.productivity.tasks || [];
+  const doneCount = tasks.filter((item) => item.done).length;
+  const overdueCount = tasks.filter((item) => !item.done && item.deadline && new Date(item.deadline) < new Date()).length;
+  const focusScore = Math.max(0, Math.min(100, Math.round((doneCount * 18) + ((state.productivity.pomodoro?.sessionCount || 0) * 6))));
+  return {
+    totalTasks: tasks.length,
+    doneCount,
+    overdueCount,
+    openCount: tasks.length - doneCount,
+    habitCount: state.productivity.habits?.length || 0,
+    focusScore
+  };
+}
+
+export function wellnessSummary(state) {
+  const score = bmi(state.wellness.metrics?.heightCm, state.wellness.metrics?.weightKg);
+  const moods = state.wellness.moods || [];
+  const moodAverage = moods.length ? Number((sum(moods, (item) => item.mood) / moods.length).toFixed(1)) : 0;
+  return {
+    bmi: score,
+    moodAverage,
+    journalCount: state.wellness.journal?.length || 0,
+    waterMlToday: state.wellness.metrics?.waterMlToday || 0
+  };
+}
+
+export function aiUsageSummary(state) {
+  const used = Number(state.meta.usedAiCredits || 0);
+  const total = Number(state.meta.monthlyAiCredits || 0);
+  return {
+    used,
+    total,
+    remaining: Math.max(0, total - used)
+  };
+}
+
+export function dashboardContext(state) {
+  return {
+    finance: financeSummary(state),
+    productivity: productivitySummary(state),
+    wellness: wellnessSummary(state),
+    ai: aiUsageSummary(state)
+  };
+}

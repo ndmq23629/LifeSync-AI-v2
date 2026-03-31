@@ -1,0 +1,137 @@
+import { loadState, subscribe, updateState } from "./services/state.js";
+import { cloudAvailable, flushOutbox, syncSnapshot } from "./services/api.js";
+import { readOutbox } from "./services/idb.js";
+import { dashboardContext } from "./services/selectors.js";
+import { installPromptHandler, toast } from "./services/ui.js";
+
+const routes = {
+  dashboard: { title: "Tổng quan điều hành", loader: () => import("./modules/dashboard.js") },
+  finance: { title: "AI Finance", loader: () => import("./modules/finance.js") },
+  productivity: { title: "AI Productivity", loader: () => import("./modules/productivity.js") },
+  wellness: { title: "AI Wellness & Mind Care", loader: () => import("./modules/wellness.js") },
+  assistant: { title: "AI Assistant", loader: () => import("./modules/assistant.js") },
+  settings: { title: "Cài đặt & vận hành", loader: () => import("./modules/settings.js") }
+};
+
+let currentRoute = loadState().settings.defaultRoute || "dashboard";
+let installAction = null;
+let moduleContext = null;
+
+init();
+
+async function init() {
+  registerNavigation();
+  registerShellButtons();
+  registerInstallFlow();
+  registerServiceWorker();
+  window.addEventListener("online", handleOnline);
+  subscribe(() => updateChrome());
+  updateChrome();
+  await renderCurrentRoute();
+}
+
+async function renderCurrentRoute() {
+  const state = loadState();
+  const route = routes[currentRoute];
+  const root = document.getElementById("module-root");
+  const moduleTitle = document.getElementById("module-title");
+  root.innerHTML = "<div class='card'><p>Đang tải module...</p></div>";
+  moduleTitle.textContent = route.title;
+
+  const module = await route.loader();
+  moduleContext = {
+    root,
+    state,
+    getState: loadState,
+    updateState,
+    refreshChrome: updateChrome
+  };
+  await module.mount(moduleContext);
+  root.focus({ preventScroll: true });
+  setActiveNav();
+}
+
+function registerNavigation() {
+  document.querySelectorAll(".nav-button").forEach((button) => {
+    button.addEventListener("click", async () => {
+      currentRoute = button.dataset.route;
+      updateState((draft) => {
+        draft.settings.defaultRoute = currentRoute;
+        return draft;
+      });
+      await renderCurrentRoute();
+    });
+  });
+}
+
+function registerShellButtons() {
+  document.getElementById("sync-now-btn")?.addEventListener("click", async () => {
+    const result = await syncSnapshot(loadState());
+    if (result?.localOnly) toast("Đang chạy local-only. Chưa có backend.");
+    else if (result?.queued) toast("Mất mạng hoặc backend lỗi. Đã đưa vào hàng chờ.");
+    else toast("Đã đồng bộ snapshot.");
+    updateChrome();
+  });
+
+  document.getElementById("enable-notifications-btn")?.addEventListener("click", async () => {
+    if (!("Notification" in window)) {
+      toast("Trình duyệt này không hỗ trợ Notifications.");
+      return;
+    }
+    const permission = await Notification.requestPermission();
+    toast(permission === "granted" ? "Đã cấp quyền thông báo." : "Quyền thông báo chưa được cấp.");
+  });
+}
+
+function registerInstallFlow() {
+  const installButton = document.getElementById("install-app-btn");
+  installButton.disabled = true;
+  installPromptHandler((ready, action) => {
+    installAction = action;
+    installButton.disabled = !ready;
+  });
+  installButton.addEventListener("click", async () => {
+    if (!installAction) {
+      toast("Trình duyệt chưa sẵn sàng cho lời mời cài app.");
+      return;
+    }
+    const accepted = await installAction();
+    toast(accepted ? "Đã gửi lời mời cài app." : "Người dùng đã đóng lời mời cài.");
+  });
+}
+
+async function registerServiceWorker() {
+  if (!("serviceWorker" in navigator)) return;
+  try {
+    await navigator.serviceWorker.register("./sw.js");
+  } catch (error) {
+    console.warn("Service worker failed:", error);
+  }
+}
+
+async function handleOnline() {
+  const result = await flushOutbox();
+  if (result.sent > 0) toast(`Đã gửi lại ${result.sent} yêu cầu đang chờ.`);
+  updateChrome();
+}
+
+async function updateChrome() {
+  const state = loadState();
+  const outbox = await readOutbox();
+  const context = dashboardContext(state);
+  document.getElementById("mode-badge").textContent = cloudAvailable() ? "Hybrid cloud" : "Local demo";
+  document.getElementById("cloud-badge").textContent = state.meta.cloudConnected || cloudAvailable() ? "Có thể kết nối" : "Chưa kết nối";
+  document.getElementById("queue-count").textContent = `${outbox.length} yêu cầu`;
+  document.getElementById("plan-pill").textContent = `Plan: ${capitalize(state.user.plan || "starter")}`;
+  document.getElementById("retention-pill").textContent = context.productivity.overdueCount > 0 ? "Act now" : "Retention-led";
+}
+
+function setActiveNav() {
+  document.querySelectorAll(".nav-button").forEach((button) => {
+    button.classList.toggle("is-active", button.dataset.route === currentRoute);
+  });
+}
+
+function capitalize(value) {
+  return value.charAt(0).toUpperCase() + value.slice(1);
+}

@@ -1,0 +1,149 @@
+import { addToOutbox, readOutbox, removeFromOutbox } from "./idb.js";
+import { getSessionToken } from "./cloud.js";
+
+const DEFAULT_HEADERS = { "Content-Type": "application/json" };
+
+export function getApiBaseUrl() {
+  return (window.LifeSyncConfig?.apiBaseUrl || "").replace(/\/$/, "");
+}
+
+export function cloudAvailable() {
+  return Boolean(getApiBaseUrl());
+}
+
+export async function apiFetch(path, options = {}) {
+  const token = await getSessionToken();
+  const headers = {
+    ...DEFAULT_HEADERS,
+    ...(options.headers || {}),
+    ...(token ? { Authorization: `Bearer ${token}` } : { "x-demo-user": window.LifeSyncConfig?.demoUser?.id || "demo-user" })
+  };
+
+  const baseUrl = getApiBaseUrl();
+  if (!baseUrl) throw new Error("API base URL chưa cấu hình");
+
+  const response = await fetch(`${baseUrl}${path}`, {
+    method: options.method || "GET",
+    headers,
+    body: options.body ? JSON.stringify(options.body) : undefined
+  });
+
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(text || `HTTP ${response.status}`);
+  }
+
+  const contentType = response.headers.get("content-type") || "";
+  if (contentType.includes("application/json")) {
+    return response.json();
+  }
+  return response.text();
+}
+
+export async function queueRequest(path, method, body) {
+  const item = {
+    id: crypto.randomUUID(),
+    path,
+    method,
+    body,
+    createdAt: new Date().toISOString()
+  };
+  await addToOutbox(item);
+  return item;
+}
+
+export async function registerBackgroundSync() {
+  if (!("serviceWorker" in navigator)) return false;
+  const registration = await navigator.serviceWorker.ready;
+  if ("sync" in registration) {
+    await registration.sync.register("lifesync-outbox");
+    return true;
+  }
+  return false;
+}
+
+export async function syncSnapshot(state) {
+  const payload = {
+    snapshot: state,
+    syncedAt: new Date().toISOString()
+  };
+  if (!cloudAvailable()) return { ok: false, localOnly: true };
+
+  try {
+    return await apiFetch("/api/sync", { method: "POST", body: payload });
+  } catch (error) {
+    await queueRequest("/api/sync", "POST", payload);
+    await registerBackgroundSync();
+    return { ok: false, queued: true, reason: error.message };
+  }
+}
+
+export async function assistantPlan(payload) {
+  if (!cloudAvailable()) {
+    return localAssistantFallback(payload);
+  }
+
+  try {
+    return await apiFetch("/api/assistant", { method: "POST", body: payload });
+  } catch (error) {
+    return localAssistantFallback(payload, error.message);
+  }
+}
+
+export async function subscribePush(subscription) {
+  if (!cloudAvailable()) return { ok: false, localOnly: true };
+  return apiFetch("/api/push-subscribe", { method: "POST", body: { subscription } });
+}
+
+export async function createCheckout(priceId) {
+  if (!cloudAvailable()) throw new Error("Chưa cấu hình backend checkout");
+  return apiFetch("/api/create-checkout", { method: "POST", body: { priceId } });
+}
+
+export async function flushOutbox() {
+  const items = await readOutbox();
+  if (!items.length || !cloudAvailable()) return { sent: 0, pending: items.length };
+  let sent = 0;
+  for (const item of items) {
+    try {
+      await apiFetch(item.path, { method: item.method, body: item.body });
+      await removeFromOutbox(item.id);
+      sent += 1;
+    } catch (error) {
+      console.warn("Outbox item still pending:", error.message);
+    }
+  }
+  return { sent, pending: Math.max(0, items.length - sent) };
+}
+
+function localAssistantFallback(payload, backendError = "") {
+  const context = payload?.context || {};
+  const finance = context.finance || {};
+  const productivity = context.productivity || {};
+  const messages = [];
+
+  const spend = Number(finance.expenseTotal || 0);
+  const budget = Number(finance.monthlyBudget || 0);
+  if (budget && spend > budget * 0.8) {
+    messages.push("Chi tiêu tháng đang chạm vùng 80% ngân sách. Ưu tiên khóa 1-2 khoản tùy hứng trong 7 ngày tới.");
+  }
+
+  if ((productivity.overdueCount || 0) > 0) {
+    messages.push("Bạn đang có việc quá hạn. Hãy chốt 1 việc quan trọng nhất trong 25 phút Pomodoro đầu tiên.");
+  }
+
+  if (!messages.length) {
+    messages.push("Hiện dữ liệu khá ổn. Bản miễn phí nên tập trung 2 hành động tạo giá trị rõ nhất: theo dõi chi tiêu hằng ngày và chốt 3 việc quan trọng.");
+  }
+
+  if (backendError) {
+    messages.push(`Lưu ý kỹ thuật: backend chưa phản hồi (${backendError}). Ứng dụng vẫn đang chạy ở chế độ local-first.`);
+  }
+
+  return {
+    ok: true,
+    model: "local-heuristic",
+    text: messages.join(" "),
+    creditsUsed: 0
+  };
+}
